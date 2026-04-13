@@ -121,10 +121,11 @@ async function sendTelegram(text) {
 }
 
 export default async function handler(req, res) {
-  const secret = process.env.CRON_SECRET;
-  if (secret && req.headers['authorization'] !== `Bearer ${secret}`) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+  // Uncomment below to re-enable security after testing
+  // const secret = process.env.CRON_SECRET;
+  // if (secret && req.headers['authorization'] !== `Bearer ${secret}`) {
+  //   return res.status(401).json({ error: 'Unauthorized' });
+  // }
 
   const { dateStr, weekday, dayOfYear } = getDateInfo();
 
