@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { vocabulary } from '../vocab.js';
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -9,81 +10,114 @@ function getDateInfo() {
     ...options, year: 'numeric', month: '2-digit', day: '2-digit'
   });
   const weekday = now.toLocaleDateString('zh-CN', { ...options, weekday: 'long' });
-  // Use day-of-year as seed for content rotation
   const start = new Date(now.getFullYear(), 0, 0);
   const dayOfYear = Math.floor((now - start) / 86400000);
   return { dateStr, weekday, dayOfYear };
 }
 
-async function generateModule(moduleNum, dayOfYear, dateStr) {
-  const prompts = {
-    1: `你是一位专业的英语学习教练，服务对象是在做海外社媒运营的中国职场人，英语高中水平，目标是达到工作英语水平。
+const NEW_WORDS_PER_DAY = 20;
+const REVIEW_WORDS_PER_DAY = 10;
+const REVIEW_INTERVAL_DAYS = 7;
 
-今天是 ${dateStr}，轮换序号为 ${dayOfYear}（用于确保每天内容不重复）。
+function getTodayVocab(dayOfYear) {
+  const startIndex = (dayOfYear * NEW_WORDS_PER_DAY) % vocabulary.length;
+  const newWords = [];
+  for (let i = 0; i < NEW_WORDS_PER_DAY; i++) {
+    newWords.push(vocabulary[(startIndex + i) % vocabulary.length]);
+  }
 
-请生成【模块一：词汇 + 行业阅读】的学习内容，要求如下：
-- 8个与社媒运营直接相关的英文词汇，包含词性、中文释义、一个真实社媒场景例句
-- 1段3-4句的英文行业短文（来自社媒/内容营销场景），附中文译文
-- 词汇每14天内不重复，根据轮换序号 ${dayOfYear} 选择不同词汇
+  // Review words from REVIEW_INTERVAL_DAYS ago
+  const reviewDay = dayOfYear - REVIEW_INTERVAL_DAYS;
+  const reviewStart = ((reviewDay * NEW_WORDS_PER_DAY) % vocabulary.length + vocabulary.length) % vocabulary.length;
+  const reviewWords = [];
+  for (let i = 0; i < REVIEW_WORDS_PER_DAY; i++) {
+    reviewWords.push(vocabulary[(reviewStart + i) % vocabulary.length]);
+  }
 
-输出格式（直接输出内容，不要加任何前缀说明）：
-<b>📚 模块一：词汇 + 阅读</b>（20分钟）
+  return { newWords, reviewWords };
+}
 
-<b>今日词汇</b>
+function formatVocabMessage({ newWords, reviewWords }) {
+  const newLines = newWords.map((w, i) =>
+    `<b>${i + 1}. ${w.word}</b> ${w.pos} · ${w.zh}\n例：<i>${w.example}</i>`
+  ).join('\n\n');
 
-<b>1. [单词]</b> [词性] · [中文]
-例：<i>[例句]</i>
+  const reviewLines = reviewWords.map(w =>
+    `• <b>${w.word}</b> ——（填写中文意思，再看答案：${w.zh}）`
+  ).join('\n');
 
-<b>2. [单词]</b> [词性] · [中文]
-例：<i>[例句]</i>
+  return `<b>📚 模块一：词汇 + 阅读</b>（20分钟）\n\n<b>今日新词（${NEW_WORDS_PER_DAY}个）</b>\n\n${newLines}\n\n——————\n\n<b>🔁 复习上周词汇（${REVIEW_WORDS_PER_DAY}个）</b>\n先默想中文意思，再看答案👇\n\n${reviewLines}`;
+}
 
-（以此格式列出8个词汇）
+async function generateReading(words, dateStr) {
+  const wordList = words.map(w => w.word).join(', ');
+  const prompt = `你是一位专业的英语学习教练。
+
+今天是 ${dateStr}。请根据以下词汇，写一段3-4句的英文行业短文（社媒/内容营销场景），尽量自然地使用其中2-3个词，然后附上中文译文。
+
+今日词汇：${wordList}
+
+输出格式（直接输出，不要加前缀）：
 
 <b>今日阅读</b>
-<i>[英文短文]</i>
+<i>[英文短文3-4句]</i>
 
-译文：[中文翻译]`,
+译文：[中文翻译]`;
 
-    2: `你是一位专业的英语学习教练，服务对象是在做海外社媒运营的中国职场人，英语高中水平，目标是达到工作英语水平。
+  const message = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 512,
+    messages: [{ role: 'user', content: prompt }]
+  });
+  return message.content[0].text;
+}
 
-今天是 ${dateStr}，轮换序号为 ${dayOfYear}（用于确保每天内容不重复）。
+async function generateModule2(dayOfYear, dateStr) {
+  const platforms = ['Instagram', 'Twitter/X', 'LinkedIn'];
+  const platform = platforms[dayOfYear % 3];
 
-请生成【模块二：文案仿写练习】的学习内容，要求如下：
-- 按轮换序号选择平台：序号除以3余0用Instagram，余1用Twitter/X，余2用LinkedIn
-- 提供1条真实风格的英文社媒帖子作为参考
-- 用中文分析2-3个关键表达技巧
-- 给出1个中文写作提示，让学员写自己的英文版本
+  const prompt = `你是一位专业的英语学习教练，服务对象是在做海外社媒运营的中国职场人，英语高中水平。
 
-输出格式（直接输出内容，不要加任何前缀说明）：
+今天是 ${dateStr}，今日平台：${platform}。
+
+请生成一条真实风格的${platform}英文帖子作为仿写参考，用中文分析2-3个关键表达技巧，并给出一个中文写作提示。
+
+输出格式（直接输出，不要加前缀）：
 <b>✍️ 模块二：文案仿写</b>（20分钟）
 
-<b>今日平台：</b>[平台名]
+<b>今日平台：</b>${platform}
 
 <b>参考文案</b>
-<i>"[英文帖子原文]"</i>
+<i>"[英文帖子]"</i>
 
 <b>分析要点</b>
 • [技巧1]
 • [技巧2]
 • [技巧3]
 
-<b>你来写：</b>[中文写作提示，说明场景和要求]`,
+<b>你来写：</b>[中文写作提示，说明场景和要求]`;
 
-    3: `你是一位专业的英语学习教练，服务对象是在做海外社媒运营的中国职场人，英语高中水平，目标是达到工作英语水平。
+  const message = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 768,
+    messages: [{ role: 'user', content: prompt }]
+  });
+  return message.content[0].text;
+}
 
-今天是 ${dateStr}，轮换序号为 ${dayOfYear}（用于确保每天内容不重复）。
+async function generateModule3(dayOfYear, dateStr) {
+  const prompt = `你是一位专业的英语学习教练，服务对象是在做海外社媒运营的中国职场人，英语高中水平。
 
-请生成【模块三：听力练习】的学习内容，要求如下：
-- 推荐1个真实存在的英文播客节目或YouTube频道（给出节目名和频道名，不要给具体链接）
-- 3个中文收听引导问题（帮助聚焦理解）
-- 1句10-15个词的英文句子用于跟读，附发音要点提示
+今天是 ${dateStr}，轮换序号 ${dayOfYear}。
 
-输出格式（直接输出内容，不要加任何前缀说明）：
+推荐一个真实存在的英文播客或YouTube频道（社媒/营销/创业方向，根据序号轮换不同节目），给出3个中文收听引导问题，以及1句跟读练习句子。
+
+输出格式（直接输出，不要加前缀）：
 <b>🎧 模块三：听力练习</b>（20分钟）
 
 <b>今日推荐</b>
-节目：[播客/频道名称]
-说明：[一句话介绍这个节目，中文]
+节目：[名称]
+简介：[一句中文介绍]
 
 <b>带着问题去听</b>
 1. [问题1]
@@ -91,16 +125,14 @@ async function generateModule(moduleNum, dayOfYear, dateStr) {
 3. [问题3]
 
 <b>跟读练习</b>
-<i>"[英文句子]"</i>
-发音提示：[中文说明难点发音]`
-  };
+<i>"[10-15词英文句子]"</i>
+发音提示：[中文说明难点]`;
 
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 1024,
-    messages: [{ role: 'user', content: prompts[moduleNum] }]
+    max_tokens: 512,
+    messages: [{ role: 'user', content: prompt }]
   });
-
   return message.content[0].text;
 }
 
@@ -129,14 +161,20 @@ export default async function handler(req, res) {
 
   const { dateStr, weekday, dayOfYear } = getDateInfo();
 
-  // Send header message
   await sendTelegram(`📅 <b>英语每日任务 · ${dateStr} ${weekday}</b>\n\n今天共3个模块，合计60分钟，加油 💪`);
 
-  // Send each module separately to stay within Telegram's 4096-char limit
-  for (let i = 1; i <= 3; i++) {
-    const content = await generateModule(i, dayOfYear, dateStr);
-    await sendTelegram(content);
-  }
+  // Module 1: vocab from list (no AI) + AI-generated reading
+  const todayVocab = getTodayVocab(dayOfYear);
+  await sendTelegram(formatVocabMessage(todayVocab));
+  const reading = await generateReading(todayVocab.newWords, dateStr);
+  await sendTelegram(reading);
+
+  // Module 2 & 3: AI-generated
+  const mod2 = await generateModule2(dayOfYear, dateStr);
+  await sendTelegram(mod2);
+
+  const mod3 = await generateModule3(dayOfYear, dateStr);
+  await sendTelegram(mod3);
 
   await sendTelegram('✅ 今日任务发送完毕！完成后记得打卡 📝');
 
